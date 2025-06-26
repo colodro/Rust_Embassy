@@ -1,0 +1,1 @@
+C:\Material\Material\ 2025.1\Embarcados\rust_stm32g4_demo\target\thumbv7em-none-eabihf\debug\rust_stm32g4_demo: C:\Material\Material\ 2025.1\Embarcados\rust_stm32g4_demo\build.rs C:\Material\Material\ 2025.1\Embarcados\rust_stm32g4_demo\src\main.rs
