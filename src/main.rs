@@ -22,22 +22,8 @@ use embassy_stm32::exti::ExtiInput;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
-/*
-// Declare async tasks
-#[embassy_executor::task]
-async fn adc_task(mut adc: adc::Adc<'static, ADC1>, mut adc_pin: AnyAdcChannel<ADC1>) {
-    
-    adc.set_sample_time(SampleTime::CYCLES47_5);
 
-    loop {
-        let measured = adc.blocking_read(&mut adc_pin);
-        info!("measured: {}", measured);
-        Timer::after_millis(500).await;
-    }
-}
-     */
-
-// Declare async tasks
+static mut LED_ENABLED: bool = true; // Declare async tasks
 #[embassy_executor::task]
 async fn button_task(mut button: ExtiInput<'static>) {
     info!("Press the USER button...");
@@ -45,16 +31,27 @@ async fn button_task(mut button: ExtiInput<'static>) {
     loop {
         button.wait_for_rising_edge().await;
         info!("Pressed!");
-        button.wait_for_falling_edge().await;
-        info!("Released!");
+        if button.is_high() {
+            info!("Pressed!");
+            
+            // Inverte o estado do LED e notifica a task principal
+            unsafe {
+            LED_ENABLED = !LED_ENABLED; // A lterna o estado do LED
+        }
+            // Espera pela borda de descida (soltura) com debounce
+            button.wait_for_falling_edge().await;
+            info!("Released!");
+        }
     }
-}
+} 
+
 
 //bind_interrupts!(struct Irqs {
 //    TIM2 => timer::CaptureCompareInterruptHandler<peripherals::TIM2>;
 //});
 
 //#[link_section = ".ram2bss"]
+
 #[link_section = ".ccmram"]
 static mut TESTE: i32 = 60;
 
@@ -92,27 +89,12 @@ unsafe fn before_main() {
     }
 }
 
-#[interrupt]
-unsafe fn TIM3(){
-    
-    // reset interrupt flag
-    //unsafe {
-    //    let pin = embassy_stm32::peripherals::PA5::steal();
-    //    let mut pin = Output::new(pin, Level::High, Speed::Low);
-    //    pin.set_high();
-    //}
-    //pac::TIM3.sr().modify(|r| r.set_uif(false));
-    info!("interrupt happens: tim20");
-}
-
-
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    //unsafe {
-        //TESTE = 10;
-        //TESTE2 = 20;
-    //}
+    unsafe { embassy_stm32::pac::RCC.ahb1enr().modify(|r| r.set_gpiocen(true)); }
+    
+ 
      let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
@@ -139,18 +121,11 @@ async fn main(spawner: Spawner) {
     let p: embassy_stm32::Peripherals = embassy_stm32::init(config);
 
     info!("Hello World!");
-    unsafe {
-        println!("Teste de variável na memória CCMRAM {}", TESTE);
-        println!("Teste de variável na memória SRAM2 {}", TESTE2);
-    }
-    //defmt::println!("Hello, world!");
 
-    let button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Down);
 
-    //let adc = Adc::new(p.ADC1, &mut Delay);
-    //let adc_pin = p.PA1;
+    let mut button = ExtiInput::new(p.PA0, p.EXTI0, Pull::Down);
 
-    //let adc = Adc::new(p.ADC1);
+
 
     // Spawned tasks run in the background, concurrently.
     //spawner.spawn(adc_task(adc, p.PA1.degrade_adc())).unwrap();
@@ -159,62 +134,25 @@ async fn main(spawner: Spawner) {
     //let mut pwm_input = PwmInput::new(p.TIM2, p.PA0, Pull::None, khz(10));
     //pwm_input.enable();
 
-    let mut led = Output::new(p.PD12, Level::High, Speed::Low);
+    let mut led1 = Output::new(p.PD12, Level::High, Speed::Low);
+    let mut led2 = Output::new(p.PD13, Level::High, Speed::Low);
 
-    loop {
-        //info!("high");
-        led.set_high();
-        Timer::after_millis(500).await;
 
-        //info!("low");
-        led.set_low();
-        Timer::after_millis(500).await;
-    }
+     loop {
+       unsafe {
+            if LED_ENABLED {
+                led1.set_high();
+                Timer::after_millis(500).await;
+                led1.set_low();
+                Timer::after_millis(500).await;
+            } else {
+                // Mantém o LED desligado quando não está piscando
+                led1.set_low();
+                Timer::after_millis(100).await; // Pequeno delay para não sobrecarregar a CPU
+            }
+        }
+    } 
+
+   
 }
 
-
-/*
-// Some panic handler needs to be included. This one halts the processor on panic.
-use cortex_m_rt::entry;
-use rtt_target::{rtt_init_print, rprintln};
-
-use hal::prelude::*;
-use hal::stm32;
-use stm32g4xx_hal as hal;
-
-#[link_section = ".ram2bss"]
-static mut TESTE: i32 = 10;
-
-#[entry]
-fn main() -> ! {
-    rtt_init_print!();
-    rprintln!("Olá mundo!");
-    unsafe {
-        rprintln!("Teste de variável na memória SRAM2 {}", TESTE);
-    }
-
-    let teste2 = 10;
-    rprintln!("Teste de variável na memória SRAM2 {}", teste2);
-
-    let dp = stm32::Peripherals::take().expect("cannot take peripherals");
-    let mut rcc = dp.RCC.constrain();
-
-    let gpioa = dp.GPIOA.split(&mut rcc);
-    let mut led = gpioa.pa5.into_push_pull_output();
-
-    let core_periphs=cortex_m::Peripherals::take().unwrap();
-    let clocks = rcc.clocks.sys_clk;
-
-    // Create a delay abstraction based on SysTick
-    let mut delay = hal::delay::Delay::new(core_periphs.SYST, clocks.0);
-    loop{
-        rprintln!("High");
-        led.set_high().unwrap();
-        delay.delay_ms(500_u32);
-
-        rprintln!("Low");
-        led.set_low().unwrap();
-        delay.delay_ms(500_u32);
-    }
-}
-*/

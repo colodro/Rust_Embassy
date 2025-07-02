@@ -1,3 +1,3 @@
-cargo:rustc-link-search=C:\Material\Material 2025.1\Embarcados\rust_stm32g4_demo\target\thumbv7em-none-eabihf\debug\build\defmt-73f645b24aac00dd\out
+cargo:rustc-link-search=C:\Material\Material 2025.1\Embarcados\Rust_Embassy\target\thumbv7em-none-eabihf\debug\build\defmt-73f645b24aac00dd\out
 cargo:rustc-check-cfg=cfg(c_variadic)
 cargo:rustc-check-cfg=cfg(no_cas)
