@@ -1,0 +1,1 @@
+C:\Material\Material\ 2025.1\Embarcados\Rust_Embassy\target\thumbv7em-none-eabihf\release\rust_stm32g4_demo: C:\Material\Material\ 2025.1\Embarcados\Rust_Embassy\build.rs C:\Material\Material\ 2025.1\Embarcados\Rust_Embassy\src\main.rs
