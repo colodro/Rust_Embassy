@@ -14,14 +14,19 @@ use embassy_stm32::adc::{self, Adc, AdcChannel, AnyAdcChannel, SampleTime}; // A
 use embassy_stm32::gpio::{Output, Pull, Level, Speed}; // GPIO
 use embassy_stm32::interrupt; // Interrupções
 use embassy_stm32::exti::ExtiInput; // Entrada com interrupção
-use embassy_time::Timer; // Temporizador
+use embassy_time::{Duration, Timer}; // Temporizador
 use {defmt_rtt as _, panic_probe as _}; // Configuração de panic e logging
 use embassy_stm32::bind_interrupts; // Vinculação de interrupções
 use embassy_stm32::usart::{self, Uart}; // Comunicação serial
 use heapless::String; // String de tamanho fixo (sem alocação dinâmica)
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
+use itoa; // Biblioteca para conversão de números inteiros em strings
 
 // Variável global para controle do LED (acessada de forma unsafe)
 static mut LED_ENABLED: bool = true;
+
+static ADC_CHANNEL: Channel<ThreadModeRawMutex, u16, 10> = Channel::new();
 
 // Task para leitura ADC
 #[embassy_executor::task]
@@ -33,6 +38,7 @@ async fn adc_task(mut adc: adc::Adc<'static, ADC1>, mut adc_pin: AnyAdcChannel<A
         // Leitura bloqueante do valor ADC
         let measured = adc.blocking_read(&mut adc_pin);
         info!("measured: {}", measured); // Log do valor lido
+        let _ = ADC_CHANNEL.try_send(measured);
         Timer::after_millis(500).await; // Espera 500ms entre leituras
     }
 }
@@ -81,6 +87,9 @@ impl ShellCommand {
     }
 }
 
+
+
+
 // Função para processar comandos recebidos
 async fn process_command(cmd: &str, uart: &mut Uart<'static, embassy_stm32::mode::Async>) {
     // Processa o comando e gera a resposta apropriada
@@ -109,6 +118,24 @@ async fn process_command(cmd: &str, uart: &mut Uart<'static, embassy_stm32::mode
                 "Sistema OK - LED inativo\r\n"
             }
         },
+        "adc cont" => {
+    uart.write(b"Modo continuo (Ctrl+C para sair):\r\n").await.unwrap();
+    
+    let mut buf = [0u8; 1];
+    loop {
+        let value = ADC_CHANNEL.receive().await;
+        uart.write(b"ADC: ").await.unwrap();
+        uart.write(itoa::Buffer::new().format(value).as_bytes()).await.unwrap();
+        uart.write(b"\r\n").await.unwrap();
+        
+        if uart.read_until_idle( &mut buf).await.is_ok() && buf[0] == 0x03 {
+            break;
+        }
+    }
+    
+    uart.write(b"Modo continuo encerrado\r\n").await.unwrap();
+    "" // Retorno compatível
+},
         "" => "", // Comando vazio (não faz nada)
         _ => "Comando não reconhecido. Digite 'help' para ajuda.\r\n",
     };
