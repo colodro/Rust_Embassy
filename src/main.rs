@@ -26,20 +26,21 @@ use itoa; // Biblioteca para conversão de números inteiros em strings
 // Variável global para controle do LED (acessada de forma unsafe)
 static mut LED_ENABLED: bool = true;
 
-static ADC_CHANNEL: Channel<ThreadModeRawMutex, u16, 10> = Channel::new();
+static ADC_CHANNEL: Channel<ThreadModeRawMutex, u16, 32> = Channel::new();
 
 // Task para leitura ADC
 #[embassy_executor::task]
 async fn adc_task(mut adc: adc::Adc<'static, ADC1>, mut adc_pin: AnyAdcChannel<ADC1>) {
-    // Configura tempo de amostragem para 144 ciclos (balance entre velocidade e precisão)
     adc.set_sample_time(SampleTime::CYCLES144);
 
     loop {
-        // Leitura bloqueante do valor ADC
         let measured = adc.blocking_read(&mut adc_pin);
-        info!("measured: {}", measured); // Log do valor lido
+        // Se o canal estiver cheio, descarta a leitura mais antiga
+        if ADC_CHANNEL.is_full() {
+            let _ = ADC_CHANNEL.try_receive();
+        }
         let _ = ADC_CHANNEL.try_send(measured);
-        Timer::after_millis(500).await; // Espera 500ms entre leituras
+        Timer::after_millis(100).await; // Intervalo menor para mais amostras
     }
 }
 
@@ -89,13 +90,15 @@ impl ShellCommand {
 
 
 
+fn adc_to_voltage(adc_value: u16, vref_mv: u32) -> u32 {
+    (adc_value as u32 * vref_mv) / 4095
+}
 
 // Função para processar comandos recebidos
 async fn process_command(cmd: &str, uart: &mut Uart<'static, embassy_stm32::mode::Async>) {
     // Processa o comando e gera a resposta apropriada
     let response = match cmd.trim() {
-        "help" => "Comandos disponíveis:\r\n- help: Mostra esta ajuda\r\n- led on: Liga o LED\r\n- led off: Desliga o LED\r\n- led toggle: Alterna o LED\r\n- status: Mostra status do sistema\r\n",
-        "led on" => {
+"help" => "Comandos disponíveis:\r\n- help: Mostra esta ajuda\r\n- led on/off/toggle\r\n- status\r\n- adc cont: Mostra leituras ADC (q para sair)\r\n",        "led on" => {
             unsafe { LED_ENABLED = true; }
             "LED ligado\r\n"
         },
@@ -118,23 +121,47 @@ async fn process_command(cmd: &str, uart: &mut Uart<'static, embassy_stm32::mode
                 "Sistema OK - LED inativo\r\n"
             }
         },
-        "adc cont" => {
-    uart.write(b"Modo continuo (Ctrl+C para sair):\r\n").await.unwrap();
+      "adc cont" => {
+    const VREF_MV: u32 = 3300; // 3.3V em mV
+    const CORRECTION_FACTOR: u32 = 33333; // 1/0.27 ≈ 3.7037 (escalado x10000)
     
-    let mut buf = [0u8; 1];
-    loop {
-        let value = ADC_CHANNEL.receive().await;
-        uart.write(b"ADC: ").await.unwrap();
-        uart.write(itoa::Buffer::new().format(value).as_bytes()).await.unwrap();
-        uart.write(b"\r\n").await.unwrap();
-        
-        if uart.read_until_idle( &mut buf).await.is_ok() && buf[0] == 0x03 {
-            break;
+    uart.write(b"Modo continuo (q + Enter para sair):\r\n").await.unwrap();
+    uart.write(b"Formato: [valor bruto] -> [tensao] mV\r\n").await.unwrap();
+    
+    let mut exit = false;
+    let mut buffer = [0u8; 64];
+    let mut cmd_buf = [0u8; 1];
+    
+    while !exit {
+        // Verificação não-bloqueante com timeout
+        match uart.read_until_idle(&mut cmd_buf).await {
+            Ok(_) => {
+                if cmd_buf[0] == b'q' {
+                    exit = true;
+                    // Limpa buffer adicional se necessário
+                    while uart.read_until_idle(&mut cmd_buf).await.is_ok() {}
+                }
+            },
+            Err(_) => {} // Timeout ou outro erro - continuamos normalmente
         }
+        
+        // Processa leituras ADC
+        while let Ok(raw_value) = ADC_CHANNEL.try_receive() {
+            let raw_mv = (raw_value as u32 * VREF_MV) / 4095;
+            let real_mv = (raw_mv * CORRECTION_FACTOR) / 10000;
+            
+            uart.write(b"ADC: ").await.unwrap();
+            uart.write(itoa::Buffer::new().format(raw_value).as_bytes()).await.unwrap();
+            uart.write(b" -> ").await.unwrap();
+            uart.write(itoa::Buffer::new().format(real_mv).as_bytes()).await.unwrap();
+            uart.write(b" mV\r\n").await.unwrap();
+        }
+        
+        Timer::after_millis(50).await;
     }
     
     uart.write(b"Modo continuo encerrado\r\n").await.unwrap();
-    "" // Retorno compatível
+    ""
 },
         "" => "", // Comando vazio (não faz nada)
         _ => "Comando não reconhecido. Digite 'help' para ajuda.\r\n",
